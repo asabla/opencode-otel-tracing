@@ -1,0 +1,4 @@
+node_modules/
+*.log
+opencode-otel.ndjson
+.DS_Store

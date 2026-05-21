@@ -1,0 +1,25 @@
+{
+  "name": "opencode-otel-tracing",
+  "version": "0.1.0",
+  "description": "Minimal, pluggable OpenTelemetry plugin for opencode. Off by default. Zero runtime dependencies.",
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "opentelemetry",
+    "otel",
+    "observability"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/sdk": "latest",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
