@@ -32,6 +32,77 @@ OPENCODE_OTEL_OTLP_ENDPOINT=http://localhost:4318 \
 opencode
 ```
 
+## Testing locally
+
+The repo ships a `examples/jaeger-otelcol/` stack: an OpenTelemetry Collector
+(receives OTLP, prints everything to its container log) wired to Jaeger
+all-in-one (in-memory storage, UI on port 16686).
+
+```sh
+make up        # start Jaeger + collector
+make logs      # tail the collector (logs + metrics print here)
+make down      # stop the stack
+```
+
+Or by hand:
+
+```sh
+cd examples/jaeger-otelcol
+docker compose up -d
+```
+
+Run opencode pointed at the collector. The Makefile has presets for each
+opencode `--log-level`:
+
+```sh
+make run-quiet           # OTLP on, opencode logs hidden
+make run-info            # OTLP on, --print-logs --log-level=INFO
+make run-debug           # OTLP on, --print-logs --log-level=DEBUG
+make run-debug-verbose   # adds OPENCODE_OTEL_CAPTURE_CONTENT=1
+```
+
+The equivalent raw invocation:
+
+```sh
+OPENCODE_OTEL_ENABLED=1 \
+OPENCODE_OTEL_SINK=otlp-http \
+OPENCODE_OTEL_OTLP_ENDPOINT=http://localhost:4318 \
+OPENCODE_OTEL_DEBUG=1 \
+opencode
+```
+
+Open a session and trigger a tool call, then inspect:
+
+- **Traces**: <http://localhost:16686> → service `opencode`. You should see a
+  `session` span with one or more `tool <name>` children.
+- **Logs and metrics**: `docker compose logs -f otelcol`. Jaeger only ingests
+  traces; the collector's `debug` exporter prints every log record and metric
+  data point.
+
+Tear down:
+
+```sh
+docker compose down
+```
+
+If you only care about traces and want to skip the collector, point opencode
+directly at Jaeger's OTLP/HTTP port (Jaeger will 404 logs and metrics, so
+disable them):
+
+```sh
+docker run --rm -d --name jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+OPENCODE_OTEL_ENABLED=1 \
+OPENCODE_OTEL_SINK=otlp-http \
+OPENCODE_OTEL_OTLP_ENDPOINT=http://localhost:4318 \
+OPENCODE_OTEL_DISABLE_LOGS=1 \
+OPENCODE_OTEL_DISABLE_METRICS=1 \
+opencode
+```
+
 ## Configuration
 
 All configuration is via environment variables.
@@ -55,7 +126,10 @@ All configuration is via environment variables.
 
 **Traces**
 - `session` span per opencode session. Started at `session.created`, closed at `session.idle` or on error.
-- `tool <name>` span per tool execution, parented to the session span.
+- `llm chat` span per model invocation. Started at `chat.params`, closed when the matching assistant message completes. Carries `gen_ai.usage.*` token counts, cost, and request/response model attributes.
+- `tool <name>` span per tool execution.
+- `session.compacting` span when context compaction runs.
+- `permission.ask` recorded as an event on the session span.
 
 **Metrics** (emitted as OTLP gauge data points)
 - `opencode.tool.duration` (ms)
@@ -63,7 +137,7 @@ All configuration is via environment variables.
 - `opencode.cost` (USD)
 
 **Logs**
-- `session.error`, `session.compacted`, `command.executed`.
+- `session.error`, `session.compacted`, `command.executed`, `file.edited`, `permission.ask` (with decision).
 - User prompts and tool args/output when `OPENCODE_OTEL_CAPTURE_CONTENT=1`.
 
 ## Custom sinks

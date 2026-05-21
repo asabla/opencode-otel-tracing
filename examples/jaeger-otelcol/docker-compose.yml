@@ -1,0 +1,18 @@
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP/gRPC (unused by this plugin, exposed for convenience)
+      - "4318:4318" # OTLP/HTTP — point OPENCODE_OTEL_OTLP_ENDPOINT here
+    depends_on:
+      - jaeger

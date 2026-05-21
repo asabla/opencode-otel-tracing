@@ -26,6 +26,7 @@ export class Emitter {
   private pending: Promise<unknown> = Promise.resolve()
   private sessionSpans = new Map<string, OtelSpan>()
   private toolSpans = new Map<string, OtelSpan>()
+  private llmSpans = new Map<string, OtelSpan>()
 
   constructor(
     private readonly sink: OtelSink,
@@ -148,6 +149,74 @@ export class Emitter {
     })
   }
 
+  startLlmSpan(sessionId: string, attributes: Attributes): void {
+    // If a previous LLM span never closed (no matching message.updated),
+    // flush it as orphaned rather than leak the slot.
+    const stale = this.llmSpans.get(sessionId)
+    if (stale) {
+      stale.endTimeNs = nowNs()
+      stale.status = { code: "UNSET", message: "superseded" }
+      this.dispatch(stale)
+      this.llmSpans.delete(sessionId)
+    }
+    const parent = this.sessionSpans.get(sessionId)
+    this.llmSpans.set(sessionId, {
+      kind: "span",
+      traceId: parent?.traceId ?? randomTraceId(),
+      spanId: randomSpanId(),
+      parentSpanId: parent?.spanId,
+      name: "llm chat",
+      startTimeNs: nowNs(),
+      endTimeNs: 0,
+      attributes: {
+        "session.id": sessionId,
+        "gen_ai.operation.name": "chat",
+        ...attributes,
+      },
+      status: { code: "UNSET" },
+    })
+  }
+
+  endLlmSpan(sessionId: string, attributes: Attributes, error?: string): void {
+    const span = this.llmSpans.get(sessionId)
+    if (!span) return
+    span.endTimeNs = nowNs()
+    Object.assign(span.attributes, attributes)
+    span.status = error ? { code: "ERROR", message: error } : { code: "OK" }
+    this.llmSpans.delete(sessionId)
+    this.dispatch(span)
+  }
+
+  addSessionEvent(sessionId: string, name: string, attributes?: Attributes): void {
+    const span = this.sessionSpans.get(sessionId)
+    if (!span) return
+    span.events ??= []
+    span.events.push({ name, timeNs: nowNs(), attributes })
+  }
+
+  emitChildSpan(input: {
+    sessionId: string
+    name: string
+    durationMs: number
+    attributes?: Attributes
+    error?: string
+  }): void {
+    const parent = this.sessionSpans.get(input.sessionId)
+    const endNs = nowNs()
+    const startNs = endNs - Math.max(0, Math.floor(input.durationMs * 1_000_000))
+    this.dispatch({
+      kind: "span",
+      traceId: parent?.traceId ?? randomTraceId(),
+      spanId: randomSpanId(),
+      parentSpanId: parent?.spanId,
+      name: input.name,
+      startTimeNs: startNs,
+      endTimeNs: endNs,
+      attributes: { "session.id": input.sessionId, ...(input.attributes ?? {}) },
+      status: input.error ? { code: "ERROR", message: input.error } : { code: "OK" },
+    })
+  }
+
   emitLog(input: {
     severity: Severity
     body: string
@@ -176,6 +245,12 @@ export class Emitter {
   }
 
   async shutdown(): Promise<void> {
+    for (const [sessionId, span] of [...this.llmSpans]) {
+      span.endTimeNs = nowNs()
+      span.status = { code: "UNSET", message: "shutdown" }
+      this.dispatch(span)
+      this.llmSpans.delete(sessionId)
+    }
     for (const sessionId of [...this.sessionSpans.keys()]) {
       this.endSessionSpan(sessionId, "UNSET", "shutdown")
     }

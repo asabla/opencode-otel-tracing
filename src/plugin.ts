@@ -199,6 +199,33 @@ export const OtelPlugin: Plugin = async () => {
             "gen_ai.request.model": info.modelID ?? null,
             "gen_ai.system": info.providerID ?? null,
           })
+
+          // Close the LLM span we opened on chat.params, attaching usage and
+          // cost as span attributes so traces are self-contained.
+          const llmAttrs: Attributes = {
+            "gen_ai.response.model": info.modelID ?? null,
+            "gen_ai.usage.input_tokens": info.tokens?.input ?? null,
+            "gen_ai.usage.output_tokens": info.tokens?.output ?? null,
+            "gen_ai.usage.reasoning_tokens": info.tokens?.reasoning ?? null,
+            "gen_ai.usage.cache.read_tokens": info.tokens?.cache?.read ?? null,
+            "gen_ai.usage.cache.write_tokens": info.tokens?.cache?.write ?? null,
+            "opencode.cost": info.cost ?? null,
+          }
+          const errInfo = (info as { error?: { name?: string; message?: string } }).error
+          emitter.endLlmSpan(info.sessionID, llmAttrs, errInfo?.message ?? errInfo?.name)
+          break
+        }
+        case "file.edited": {
+          const file = props["file"] as string | undefined
+          const ev = props["event"] as string | undefined
+          emitter.emitLog({
+            severity: "INFO",
+            body: `file ${ev ?? "edited"}: ${file ?? "?"}`,
+            attributes: {
+              "opencode.file.path": file ?? "",
+              "opencode.file.event": ev ?? "",
+            },
+          })
           break
         }
         case "command.executed": {
@@ -213,6 +240,49 @@ export const OtelPlugin: Plugin = async () => {
           break
         }
       }
+    },
+
+    "chat.params": async (input, _output) => {
+      emitter.startLlmSpan(input.sessionID, {
+        "gen_ai.system": input.provider?.info?.id ?? input.model?.providerID ?? "unknown",
+        "gen_ai.request.model": input.model?.id ?? "unknown",
+        "opencode.agent": input.agent ?? null,
+      })
+    },
+
+    "permission.ask": async (input, output) => {
+      const i = input as {
+        sessionID?: string
+        type?: string
+        pattern?: string
+        title?: string
+      }
+      emitter.addSessionEvent(i.sessionID ?? "", "permission.ask", {
+        "opencode.permission.type": i.type ?? "",
+        "opencode.permission.pattern": i.pattern ?? "",
+        "opencode.permission.decision": output.status,
+      })
+      emitter.emitLog({
+        severity: "INFO",
+        body: `permission ${output.status}: ${i.type ?? "?"} ${i.pattern ?? ""}`.trim(),
+        sessionId: i.sessionID,
+        attributes: {
+          "opencode.permission.type": i.type ?? "",
+          "opencode.permission.pattern": i.pattern ?? "",
+          "opencode.permission.decision": output.status,
+        },
+      })
+    },
+
+    "experimental.session.compacting": async (input, output) => {
+      emitter.emitChildSpan({
+        sessionId: input.sessionID,
+        name: "session.compacting",
+        durationMs: 0,
+        attributes: {
+          "opencode.compaction.context.count": output.context?.length ?? 0,
+        },
+      })
     },
 
     "chat.message": async (input, output) => {
